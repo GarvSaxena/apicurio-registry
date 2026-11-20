@@ -9,6 +9,7 @@ import io.apicurio.registry.storage.dto.ArtifactVersionMetaDataDto;
 import io.apicurio.registry.storage.dto.LazyContentList;
 import io.apicurio.registry.storage.dto.RuleConfigurationDto;
 import io.apicurio.registry.storage.dto.StoredArtifactVersionDto;
+import io.apicurio.registry.storage.error.ArtifactNotFoundException;
 import io.apicurio.registry.cdi.Current;
 import io.apicurio.registry.rules.violation.RuleViolationException;
 import io.apicurio.registry.types.RuleType;
@@ -207,8 +208,8 @@ public class RulesServiceImpl implements RulesService {
 
     /**
      * The content of the existing versions a new version is checked against: every version that is
-     * not disabled, or, when the artifact is in a data contract compatibility group, only the versions
-     * created in that group.
+     * neither disabled nor a draft, or, when the artifact is in a data contract compatibility group,
+     * only the versions created in that group.
      */
     private static List<Long> comparableContentIds(RegistryStorage storageToUse, String groupId,
             String artifactId) {
@@ -219,9 +220,16 @@ public class RulesServiceImpl implements RulesService {
         }
         String key = compatibilityGroup.get().getKey();
         String group = compatibilityGroup.get().getValue();
-        return storageToUse
-                .getArtifactVersions(groupId, artifactId, EnumSet.complementOf(EnumSet.of(VersionState.DISABLED)))
-                .stream().map(version -> storageToUse.getArtifactVersionMetaData(groupId, artifactId, version))
+        List<String> versions;
+        try {
+            versions = storageToUse.getArtifactVersions(groupId, artifactId,
+                    EnumSet.complementOf(EnumSet.of(VersionState.DISABLED, VersionState.DRAFT)));
+        } catch (ArtifactNotFoundException e) {
+            // The group has no published versions yet, so there is no baseline to compare with.
+            return List.of();
+        }
+        return versions.stream()
+                .map(version -> storageToUse.getArtifactVersionMetaData(groupId, artifactId, version))
                 .filter(meta -> meta.getLabels() != null && group.equals(meta.getLabels().get(key)))
                 .sorted(Comparator.comparingInt(ArtifactVersionMetaDataDto::getVersionOrder))
                 .map(ArtifactVersionMetaDataDto::getContentId).toList();

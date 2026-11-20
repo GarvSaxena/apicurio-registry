@@ -56,6 +56,21 @@ public class CompatibilityGroupRuleTest extends AbstractResourceTestBase {
                 .post("/registry/v3/groups/{groupId}/artifacts/{artifactId}/versions").then();
     }
 
+    private ValidatableResponse createDraftVersion(String artifactId, String schema) {
+        return given().when().contentType(CT_JSON)
+                .body(Map.of("content", Map.of("content", schema, "contentType", ContentTypes.APPLICATION_JSON),
+                        "isDraft", true))
+                .pathParam("groupId", GROUP).pathParam("artifactId", artifactId)
+                .post("/registry/v3/groups/{groupId}/artifacts/{artifactId}/versions").then();
+    }
+
+    private ValidatableResponse updateVersionState(String artifactId, String version, String state) {
+        return given().when().contentType(CT_JSON).body(Map.of("state", state))
+                .pathParam("groupId", GROUP).pathParam("artifactId", artifactId)
+                .pathParam("version", version)
+                .put("/registry/v3/groups/{groupId}/artifacts/{artifactId}/versions/{version}/state").then();
+    }
+
     @Test
     public void testWithoutCompatibilityGroupAllVersionsAreCompared() throws Exception {
         String artifactId = "no-compatibility-group";
@@ -83,5 +98,35 @@ public class CompatibilityGroupRuleTest extends AbstractResourceTestBase {
         // A new group starts a new compatibility line
         setCompatibilityGroup(artifactId, "v3");
         createVersion(artifactId, BOOLEAN_ID).statusCode(200).body("version", equalTo("3"));
+    }
+
+    @Test
+    public void testDraftVersionIsNotUsedAsCompatibilityBaselineInGroup() throws Exception {
+        String artifactId = "with-compatibility-group-draft";
+        createArtifact(GROUP, artifactId, ArtifactType.AVRO, STRING_ID, ContentTypes.APPLICATION_JSON);
+        enableBackwardCompatibility(artifactId);
+        setCompatibilityGroup(artifactId, "v2");
+
+        // Version 2 is the first version of the group, so it has no baseline.
+        createVersion(artifactId, INT_ID).statusCode(200);
+
+        // Drafts are not validated when they are created.
+        createDraftVersion(artifactId, BOOLEAN_ID).statusCode(200)
+                .body("labels.'contract.orders.compatibility.group'", equalTo("v2"));
+
+        // Version 4 is compatible with version 2 but not with the draft, so it must be accepted.
+        createVersion(artifactId, INT_ID).statusCode(200);
+    }
+
+    @Test
+    public void testNoPublishedVersionStartsEmptyBaselineInGroup() throws Exception {
+        String artifactId = "with-compatibility-group-no-published";
+        createArtifact(GROUP, artifactId, ArtifactType.AVRO, STRING_ID, ContentTypes.APPLICATION_JSON);
+        enableBackwardCompatibility(artifactId);
+        setCompatibilityGroup(artifactId, "v2");
+        updateVersionState(artifactId, "1", "DISABLED").statusCode(204);
+
+        // Nothing published is left in the group, so the new version is a first version.
+        createVersion(artifactId, INT_ID).statusCode(200);
     }
 }
